@@ -14,6 +14,7 @@ Created by David Vallés
 
 import re
 from cosmoAMRframework.cosmo_tools import background_density
+from cosmoAMRframework import tools
 import numpy as np
 
 ############################################
@@ -508,3 +509,231 @@ def reprocess_grid_hierarchy(hierarchy, Units, ghost_zones=3):
 
     return grids, grids_data
 
+############################################
+# Block: read grid and particle data 
+############################################
+
+def determine_relevant_grids(simupath, grids_data, region=None, up_to_level=None):
+    do_read_grid = np.zeros(grids_data['numpatches'], dtype=bool)
+    patchnx = grids_data['patchnx']
+    patchny = grids_data['patchny']
+    patchnz = grids_data['patchnz']
+    patchrx = grids_data['patchrx']
+    patchry = grids_data['patchry']
+    patchrz = grids_data['patchrz']
+    npatch = grids_data['npatch']
+    size = grids_data['BoxSize']
+    nmax = grids_data['Nx']
+
+    if region is None:
+        do_read_grid[:] = True
+    else:
+        region_type = region[0]
+        if region_type == 'sphere':
+            cx, cy, cz, R = region[1:]
+            which = tools.which_patches_inside_sphere(R, cx, cy, cz, patchnx, patchny, patchnz, patchrx, patchry,
+                                                      patchrz, npatch, size, nmax)
+            do_read_grid[which] = True
+        elif region_type == 'box' or region_type == 'box_cw':
+            if region_type == 'box':
+                x1, x2, y1, y2, z1, z2 = region[1:]
+            else:
+                xc, yc, zc, width = region[1:]
+                x1 = xc - width/2
+                x2 = xc + width/2
+                y1 = yc - width/2
+                y2 = yc + width/2
+                z1 = zc - width/2
+                z2 = zc + width/2
+            which = tools.which_patches_inside_box((x1, x2, y1, y2, z1, z2), patchnx, patchny, patchnz, patchrx, patchry,
+                                                   patchrz,npatch,size,nmax)
+            do_read_grid[which] = True
+        else:
+            raise ValueError('Unknown region type. Please specify one of "sphere", "box" or "box_cw"')
+
+    if up_to_level is not None:
+        do_read_grid[grids_data['levels'] > up_to_level] = False
+
+    return do_read_grid
+
+def read_grid_quantity(simupath, quantity_name, grids_data, Units, region=None, up_to_level=None,
+                       verbose=True, units_operation=None):
+
+
+    # Determine which grids are relevant for the specified region and max level
+    do_read_grid = determine_relevant_grids(simupath, grids_data, region=region, up_to_level=up_to_level)
+    if verbose:
+        print(f"Reading {quantity_name} from {np.sum(do_read_grid)} grids out of {grids_data['numpatches']} total grids.")
+
+    # Find which CPU tasks are needed for the grids to be read
+    cpu_tasks_needed = np.unique(grids_data['cpu'][do_read_grid])
+    if verbose:
+        print(f"Number of files to read: {len(cpu_tasks_needed)} (CPU tasks: {cpu_tasks_needed})")
+
+    quantity_data = [0 for _ in range(grids_data['numpatches'])]
+    for cpu in cpu_tasks_needed:
+        grids_on_cpu = np.where((grids_data['cpu'] == cpu) & do_read_grid)[0]
+        #if verbose:
+        #    print(f"Reading CPU task {cpu} with {len(grids_on_cpu)} grids...")
+        #    print(f"   Grids on CPU {cpu}: {grids_on_cpu}")
+        with h5.File(f"{simupath}.cpu{cpu:04d}", 'r') as f:
+            for ig in grids_on_cpu:
+                grid_id = grids_data['patch_ID'][ig]
+                quantity_data[ig] = np.array(f[f'Grid{grid_id:08d}'][quantity_name]).T
+                if units_operation is not None:
+                    quantity_data[ig] = units_operation(quantity_data[ig], Units)
+
+    return quantity_data, do_read_grid
+
+
+def read_particle_quantity(simupath, quantity_name, grids_data, Units, region=None,
+                           verbose=True, units_operation=None):
+
+    # Determine which grids are relevant for the specified region and max level
+    do_read_grid = determine_relevant_grids(simupath, grids_data, region=region)
+    if verbose:
+        print(f"Reading {quantity_name} from the particles in {np.sum(do_read_grid)} grids out of {grids_data['numpatches']} total grids.")
+        print(f"Total number of particles in the selected grids: {np.sum(grids_data['numpart'][do_read_grid])}")
+
+        # Find which CPU tasks are needed for the grids to be read
+    cpu_tasks_needed = np.unique(grids_data['cpu'][do_read_grid])
+    if verbose:
+        print(f"Number of files to read: {len(cpu_tasks_needed)} (CPU tasks: {cpu_tasks_needed})")
+
+    particle_data = [] 
+    for cpu in cpu_tasks_needed:
+        with h5.File(f"{simupath}.cpu{cpu:04d}", 'r') as f:
+            grids_on_cpu = np.where((grids_data['cpu'] == cpu) & do_read_grid)[0]
+            #if verbose:
+            #    print(f"Reading CPU task {cpu} with {len(grids_on_cpu)} grids...")
+            #    print(f"   Grids on CPU {cpu}: {grids_on_cpu}")
+            for ig in grids_on_cpu:
+                if grids_data['numpart'][ig] == 0:
+                    continue  # Skip grids with no particles
+                grid_id = grids_data['patch_ID'][ig]
+                #print(ig, f[f'Grid{grid_id:08d}'].keys())
+                particle_quantity = np.array(f[f'Grid{grid_id:08d}'][quantity_name])
+                if units_operation is not None:
+                    particle_quantity = units_operation(particle_quantity, Units)
+                particle_data.append(particle_quantity)
+
+    particle_data = np.concatenate(particle_data)  # Combine all particle data into a single array 
+
+    return particle_data
+
+############################################
+# Block: refinement and overlap flags
+############################################
+
+def create_cr0amr_and_solap(grids_data, Units, read_patches=None):
+    cr0amr = []
+    solap = []
+    nl = grids_data['nlev']
+    nx = grids_data['Nx']
+
+    numpatches = grids_data['numpatches']
+    if read_patches is None:
+        read_patches = np.ones(numpatches, dtype=bool)
+
+    for ig in range(numpatches):
+        
+        # cr0amr: whether the cell is refined by a higher-level (finer) grid
+        if grids_data['levels'][ig] == nl:
+            cr0amr.append(True)
+        else:
+            if not read_patches[ig]:
+                cr0amr.append(False)
+            else:
+                # check if any of the children of this grid are read
+                nxpa = grids_data['patchnx'][ig]
+                nypa = grids_data['patchny'][ig]
+                nzpa = grids_data['patchnz'][ig]
+                cr0amr_this = np.ones((nxpa, nypa, nzpa), dtype=bool)
+
+                children = grids_data['children'][ig]
+                levpa = grids_data['levels'][ig]
+                xlpa = grids_data['patch_xl'][ig]
+                ylpa = grids_data['patch_yl'][ig]
+                zlpa = grids_data['patch_zl'][ig]
+                xrpa = grids_data['patch_xr'][ig]
+                yrpa = grids_data['patch_yr'][ig]
+                zrpa = grids_data['patch_zr'][ig]
+                dxpa = Units.ulength_Mpc / nx / 2**levpa
+
+                for ig_child in children:
+                    if read_patches[ig_child]:
+                        i1 = grids_data['patchx'][ig_child]
+                        j1 = grids_data['patchy'][ig_child]
+                        k1 = grids_data['patchz'][ig_child]
+                        i2 = i1 + grids_data['patchnx'][ig_child] // 2 - 1
+                        j2 = j1 + grids_data['patchny'][ig_child] // 2 - 1
+                        k2 = k1 + grids_data['patchnz'][ig_child] // 2 - 1
+
+                        # just a check
+                        xlch = grids_data['patch_xl'][ig_child]
+                        ylch = grids_data['patch_yl'][ig_child]
+                        zlch = grids_data['patch_zl'][ig_child]
+                        xrch = grids_data['patch_xr'][ig_child]
+                        yrch = grids_data['patch_yr'][ig_child]
+                        zrch = grids_data['patch_zr'][ig_child]
+
+                        assert xlpa <= xlch or np.isclose(xlpa, xlch), f"Grid {ig_child} is a child of grid {ig}, but the left edge in x of the child ({xlch}) is less than the left edge of the parent ({xlpa})."
+                        assert xrpa >= xrch or np.isclose(xrpa, xrch), f"Grid {ig_child} is a child of grid {ig}, but the right edge in x of the child ({xrch}) is greater than the right edge of the parent ({xrpa})."
+                        assert ylpa <= ylch or np.isclose(ylpa, ylch), f"Grid {ig_child} is a child of grid {ig}, but the left edge in y of the child ({ylch}) is less than the left edge of the parent ({ylpa})."
+                        assert yrpa >= yrch or np.isclose(yrpa, yrch), f"Grid {ig_child} is a child of grid {ig}, but the right edge in y of the child ({yrch}) is greater than the right edge of the parent ({yrpa})."
+                        assert zlpa <= zlch or np.isclose(zlpa, zlch), f"Grid {ig_child} is a child of grid {ig}, but the left edge in z of the child ({zlch}) is less than the left edge of the parent ({zlpa})."
+                        assert zrpa >= zrch or np.isclose(zrpa, zrch), f"Grid {ig_child} is a child of grid {ig}, but the right edge in z of the child ({zrch}) is greater than the right edge of the parent ({zrpa})."
+
+                        assert cr0amr_this[i1:i2+1, j1:j2+1, k1:k2+1].all() == True, f"Grid {ig_child} is a child of grid {ig}, but the corresponding region in cr0amr_this is not all True."
+                        cr0amr_this[i1:i2+1, j1:j2+1, k1:k2+1] = False
+
+                cr0amr.append(cr0amr_this)
+
+
+    #solap = None # To do, it should be just all ones because patches should not overlap!
+    solap = [] 
+    for ig in range(numpatches):
+        if not read_patches[ig]:
+            solap.append(False)
+        else:
+            solap.append(True) # Let's see if all the framework will work with this, as patches do not overlap and there is no point to save arrays of ones and zeros for each patch
+
+
+
+    return cr0amr, solap
+
+############################################
+# Block: explore the data
+############################################
+
+def print_available_fields(simupath, grid_id=1, cpu_id=0):
+    with h5.File(f"{simupath}.cpu{cpu_id:04d}", 'r') as f:
+        print(f"Available fields in grid {grid_id}:")
+        for key in f[f'Grid{grid_id:08d}'].keys():
+            print(f"  {key}: {f[f'Grid{grid_id:08d}'][key].shape}")
+
+def print_available_grids(simupath, cpu_id=0, print_content=False):
+    with h5.File(f"{simupath}.cpu{cpu_id:04d}", 'r') as f:
+        print(f"Available grids in CPU {cpu_id}:")
+        for key in f.keys():
+            if print_content:
+                print(f"  {key}: {f[key].keys()}")
+            else:
+                print(f"  {key}")
+
+############################################
+# Block: unit conversion
+############################################
+
+def transform_position_to_Mpc(positions, Units):
+    """
+    Transforms particle positions from code units to physical Mpc units.
+
+    Args:
+        positions (np.ndarray): Particle positions in code units.
+        Units (EnzoUnits): The ENZO units as computed from the parameter file.
+
+    Returns:
+        np.ndarray: Particle positions in physical Mpc units.
+    """
+    return positions * Units.ulength_Mpc
