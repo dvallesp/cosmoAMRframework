@@ -1,11 +1,12 @@
 """
-MASCLET framework
+cosmoAMRframework
 
-Provides several functions to read MASCLET outputs and perform basic operations.
-Also, serves as a bridge between MASCLET data and the yt package (v 3.5.1).
+Provides several functions to read cosmological AMR simulations (Enzo, MASCLET),
+and perform different operations on their data.
 
 parameters module
-Functions for reading and creating parameters JSON files
+Functions for reading and creating parameters JSON files (only for masclet simulations)
+and a few accessory functions within other codes (e.g., vortex-p).
 
 Created by David Vallés
 """

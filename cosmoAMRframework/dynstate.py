@@ -1,11 +1,12 @@
 """
-MASCLET framework
+cosmoAMRframework
 
-Provides several functions to read MASCLET outputs and perform basic operations.
-Also, serves as a bridge between MASCLET data and the yt package (v 3.5.1).
+Provides several functions to read cosmological AMR simulations (Enzo, MASCLET),
+and perform different operations on their data.
 
 dynstate module
-Contains functions to determine the dynamical state of DM haloes, using the parametrisation described by Vallés-Pérez et al. (2023) MNRAS 519(4) 6111-6125.
+Contains functions to determine the dynamical state of DM haloes, using the parametrisation described 
+by Vallés-Pérez et al. (2023) MNRAS 519(4) 6111-6125.
 
 Created by David Vallés
 """

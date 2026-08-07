@@ -1,13 +1,12 @@
 """
-MASCLET framework
+cosmoAMRframework
 
-Provides several functions to read MASCLET outputs and perform basic operations.
-Also, serves as a bridge between MASCLET data and the yt package (v 3.5.1).
+Provides several functions to read cosmological AMR simulations (Enzo, MASCLET),
+and perform different operations on their data.
 
 stars module
 Provides functions to calculate basic cosmological relations related to stars, 
 such as the stellar mass function and the cosmic star formation rate density.
-
 
 Created by Óscar Monllor
 """

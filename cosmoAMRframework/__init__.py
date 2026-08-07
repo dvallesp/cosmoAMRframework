@@ -1,33 +1,33 @@
 """
-MASCLET framework
+cosmoAMRframework
 
-Provides several functions to read MASCLET outputs and perform basic operations.
-Also, serves as a bridge between MASCLET data and the yt package (v 3.5.1).
+Provides several functions to read cosmological AMR simulations (Enzo, MASCLET),
+and perform different operations on their data.
 
 Created by David Vallés
 """
 
-import masclet_framework.parameters
-import masclet_framework.read_masclet
-import masclet_framework.tools
-import masclet_framework.graphics
-import masclet_framework.masclet2yt
-import masclet_framework.units
-import masclet_framework.cosmo_tools
-import masclet_framework.read_halma
-import masclet_framework.read_asohf
-import masclet_framework.read_old_asohf
-import masclet_framework.particles
-import masclet_framework.tools_xyz
-import masclet_framework.spectral
-import masclet_framework.thermal
-import masclet_framework.stats
-import masclet_framework.simulator_tools
-import masclet_framework.profiles
-import masclet_framework.selfsimilar
-import masclet_framework.diff
-import masclet_framework.particle2grid
-import masclet_framework.calcAMR
-import masclet_framework.stars
-import masclet_framework.dynstate
-import masclet_framework.read_voids
+import cosmoAMRframework.parameters
+import cosmoAMRframework.read_masclet
+import cosmoAMRframework.tools
+import cosmoAMRframework.graphics
+import cosmoAMRframework.masclet2yt
+import cosmoAMRframework.units
+import cosmoAMRframework.cosmo_tools
+import cosmoAMRframework.read_halma
+import cosmoAMRframework.read_asohf
+import cosmoAMRframework.read_old_asohf
+import cosmoAMRframework.particles
+import cosmoAMRframework.tools_xyz
+import cosmoAMRframework.spectral
+import cosmoAMRframework.thermal
+import cosmoAMRframework.stats
+import cosmoAMRframework.simulator_tools
+import cosmoAMRframework.profiles
+import cosmoAMRframework.selfsimilar
+import cosmoAMRframework.diff
+import cosmoAMRframework.particle2grid
+import cosmoAMRframework.calcAMR
+import cosmoAMRframework.stars
+import cosmoAMRframework.dynstate
+import cosmoAMRframework.read_voids

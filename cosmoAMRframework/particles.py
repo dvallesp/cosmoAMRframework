@@ -1,8 +1,8 @@
 """
-MASCLET framework
+cosmoAMRframework
 
-Provides several functions to read MASCLET outputs and perform basic operations.
-Also, serves as a bridge between MASCLET data and the yt package (v 3.5.1).
+Provides several functions to read cosmological AMR simulations (Enzo, MASCLET),
+and perform different operations on their data.
 
 particles module
 Contains several useful functions in order to deal with particles

@@ -1,12 +1,12 @@
 """
-MASCLET framework
+cosmoAMRframework
 
-Provides several functions to read MASCLET outputs and perform basic operations.
-Also, serves as a bridge between MASCLET data and the yt package (v 3.5.1).
+Provides several functions to read cosmological AMR simulations (Enzo, MASCLET),
+and perform different operations on their data.
 
 diff module
 Provides functions to compute gradients, divergences, curls of scalar and 
-vector fields defined on the AMR hierarchy of MASCLET simulations.
+vector fields defined on the AMR hierarchy.
 Created by David Vallés
 """
 
