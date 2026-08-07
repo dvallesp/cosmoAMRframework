@@ -16,6 +16,7 @@ import re
 from cosmoAMRframework.cosmo_tools import background_density
 from cosmoAMRframework import tools
 import numpy as np
+import h5py as h5
 
 ############################################
 # Block: read parameter files 
@@ -587,7 +588,7 @@ def read_grid_quantity(simupath, quantity_name, grids_data, Units, region=None, 
 
 
 def read_particle_quantity(simupath, quantity_name, grids_data, Units, region=None,
-                           verbose=True, units_operation=None):
+                           verbose=True, units_operation=None, override_default_unit_conversion=False):
 
     # Determine which grids are relevant for the specified region and max level
     do_read_grid = determine_relevant_grids(simupath, grids_data, region=region)
@@ -599,6 +600,12 @@ def read_particle_quantity(simupath, quantity_name, grids_data, Units, region=No
     cpu_tasks_needed = np.unique(grids_data['cpu'][do_read_grid])
     if verbose:
         print(f"Number of files to read: {len(cpu_tasks_needed)} (CPU tasks: {cpu_tasks_needed})")
+  
+    if not override_default_unit_conversion:
+        if quantity_name in ['particle_position_x', 'particle_position_y', 'particle_position_z']:
+            units_operation = transform_position_to_Mpc
+            if verbose:
+                print(f'Field is a particle position, so it will be transformed to Mpc.')
 
     particle_data = [] 
     for cpu in cpu_tasks_needed:
