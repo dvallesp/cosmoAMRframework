@@ -608,6 +608,12 @@ def read_particle_quantity(simupath, quantity_name, grids_data, Units, region=No
             units_operation = transform_position_to_Mpc
             if verbose:
                 print(f'Field is a particle position, so it will be transformed to Mpc.')
+        if quantity_name in ['particle_mass']:
+            units_operation = transform_mass_to_Msun
+            if verbose:
+                print(f'Field is a particle mass, so it will be transformed to Msun.')
+
+    is_mass = quantity_name in ['particle_mass']
 
     particle_data = [] 
     for cpu in cpu_tasks_needed:
@@ -622,6 +628,10 @@ def read_particle_quantity(simupath, quantity_name, grids_data, Units, region=No
                 grid_id = grids_data['patch_ID'][ig]
                 #print(ig, f[f'Grid{grid_id:08d}'].keys())
                 particle_quantity = np.array(f[f'Grid{grid_id:08d}'][quantity_name])
+
+                if is_mass:
+                    particle_quantity /= 8**grids_data['levels'][ig]  # Adjust mass for refinement level
+                
                 if units_operation is not None:
                     particle_quantity = units_operation(particle_quantity, Units)
                 particle_data.append(particle_quantity)
@@ -746,3 +756,16 @@ def transform_position_to_Mpc(positions, Units):
         np.ndarray: Particle positions in physical Mpc units.
     """
     return positions * Units.ulength_Mpc
+
+def transform_mass_to_Msun(masses, Units):
+    """
+    Transforms particle masses from code units to physical Msun units.
+
+    Args:
+        masses (np.ndarray): Particle masses in code units.
+        Units (EnzoUnits): The ENZO units as computed from the parameter file.
+
+    Returns:
+        np.ndarray: Particle masses in physical Msun units.
+    """
+    return masses * Units.umass_Msun
