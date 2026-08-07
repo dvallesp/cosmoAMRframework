@@ -12,7 +12,7 @@ Created by David Vallés
 """
 
 import numpy as np
-from masclet_framework import units, cosmo_tools
+from cosmoAMRframework import units, cosmo_tools
 
 def M_from_R(R, delta=200, norm='m', z=0., units_r='comoving',
              h=0.678, omega_m=0.31):

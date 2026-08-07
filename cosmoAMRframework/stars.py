@@ -14,7 +14,7 @@ Created by Óscar Monllor
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
-from masclet_framework import read_halma, read_masclet, units
+from cosmoAMRframework import read_halma, read_masclet, units
 
 
 

@@ -17,7 +17,7 @@ import astropy.stats
 from scipy.stats import spearmanr, t
 from scipy.interpolate import UnivariateSpline
 import emcee
-from masclet_framework import graphics
+from cosmoAMRframework import graphics
 from multiprocessing import Pool
 from scipy.stats import gaussian_kde
 from scipy.optimize import brentq

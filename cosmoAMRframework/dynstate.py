@@ -11,7 +11,7 @@ by Vallés-Pérez et al. (2023) MNRAS 519(4) 6111-6125.
 Created by David Vallés
 """
 import numpy as np
-from masclet_framework import units
+from cosmoAMRframework import units
 
 def dynamical_state_thresholds(z=0., mode='VP23'):
     '''

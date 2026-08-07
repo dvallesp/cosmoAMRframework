@@ -12,7 +12,7 @@ Created by David Vallés
 
 #  Last update on 26/3/20 16:21
 
-import masclet_framework as masclet
+import cosmoAMRframework as masclet
 import numpy as np
 import os
 

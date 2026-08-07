@@ -11,7 +11,7 @@ Created by David Vallés
 
 from numba import jit
 import numpy as np
-from masclet_framework import tools, stats
+from cosmoAMRframework import tools, stats
 try:
     from tqdm import tqdm
 except ImportError:

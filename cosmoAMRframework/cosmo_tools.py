@@ -16,7 +16,7 @@ import json
 import os
 import numpy as np
 from scipy import integrate
-from masclet_framework import units
+from cosmoAMRframework import units
 
 
 def write_cosmo_parameters(h, omega_m, omega_lambda, omega_b, filename='cosmo_parameters.json', path=''):

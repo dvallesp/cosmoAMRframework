@@ -20,7 +20,7 @@ import numpy as np
 
 from multiprocessing import Pool
 
-from masclet_framework import cosmo_tools, tools
+from cosmoAMRframework import cosmo_tools, tools
 
 from scipy import optimize
 

@@ -35,8 +35,8 @@ from numba.typed import List
 
 
 # MASCLET FRAMEWORK MODULES
-from masclet_framework.profiles import locate_point
-from masclet_framework import tools
+from cosmoAMRframework.profiles import locate_point
+from cosmoAMRframework import tools
 
 
 # FUNCTIONS DEFINED IN THIS MODULE
@@ -992,8 +992,8 @@ def slice_map(field, normal_vector, north_vector,
     return tuple(return_vars)
 
 
-from masclet_framework import tools 
-from masclet_framework.profiles import locate_point
+from cosmoAMRframework import tools 
+from cosmoAMRframework.profiles import locate_point
 from numba import njit, prange
 from numba.typed import List
 

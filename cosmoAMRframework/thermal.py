@@ -9,7 +9,7 @@ Provides useful functions to compute and work with thermodynamical quantities
 Created by David Vallés
 """
 
-from masclet_framework import units, cosmo_tools
+from cosmoAMRframework import units, cosmo_tools
 import numpy as np
 
 def molecular_weight(T, P, delta, h=0.678, omega_m=0.31, X=0.75, kept_patches=None, electrons=False): 

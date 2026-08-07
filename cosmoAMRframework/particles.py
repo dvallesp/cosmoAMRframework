@@ -19,7 +19,7 @@ from tqdm import tqdm
 
 # from multiprocessing import Pool
 
-from masclet_framework import cosmo_tools, units, tools
+from cosmoAMRframework import cosmo_tools, units, tools
 
 import collections
 from scipy import optimize

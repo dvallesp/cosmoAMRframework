@@ -18,8 +18,8 @@ Created by David Vallés
 import numpy as np
 
 # masclet_framework
-from masclet_framework import tools
-from masclet_framework import parameters, read_masclet
+from cosmoAMRframework import tools
+from cosmoAMRframework import parameters, read_masclet
 
 
 # FUNCTIONS DEFINED IN THIS MODULE

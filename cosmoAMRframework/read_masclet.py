@@ -32,8 +32,8 @@ else:
     from tqdm import tqdm
 
 # masclet_framework
-from masclet_framework import parameters
-from masclet_framework import tools
+from cosmoAMRframework import parameters
+from cosmoAMRframework import tools
 
 
 # FUNCTIONS DEFINED IN THIS MODULE

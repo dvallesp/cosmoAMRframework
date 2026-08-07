@@ -12,7 +12,7 @@ Created by David Vallés
 
 import numpy as np
 from numba import njit, prange, jit
-from masclet_framework import tools
+from cosmoAMRframework import tools
 
 ## Patch stuff (arr_ functions)
 @njit(fastmath=True)

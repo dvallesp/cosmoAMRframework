@@ -9,7 +9,7 @@ Provides handy tools for debugging or assessing the progress of MASCLET simulati
 Created by David Vallés
 """
 
-from masclet_framework import units
+from cosmoAMRframework import units
 
 def dt_to_velocity(dt, cellsize, CFL, z=0.0):
     '''

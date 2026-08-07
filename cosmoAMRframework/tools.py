@@ -27,7 +27,7 @@ import warnings
 
 from scipy.interpolate import LinearNDInterpolator
 
-# from masclet_framework import cosmo_tools, units
+# from cosmoAMRframework import cosmo_tools, units
 
 # from scipy import optimize
 
