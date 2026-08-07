@@ -1,6 +1,8 @@
-# MASCLET Framework
+# cosmoAMRframework
 
-This library implements some functions which can be used to handle the outputs from the cosmological code MASCLET (Quilis, 2004). Do not hesitate to contact the creator of the library (David Vallés) for any troubles you might encounter or suggestions you might have regarding this library.
+This library implements some utilities that can be used to handle the outputs from cosmological AMR simulations, such as those stemming from Enzo or MASCLET. It is derived from [masclet_framework](https://github.com/dvallesp/masclet_framework).
+
+Do not hesitate to contact the creator of the library (David Vallés) for any troubles you might encounter or suggestions you might have regarding this library.
 
 In the following lines, we add some brief information about each of the modules of the library. More information about the specific usage of each function can be found in their corresponding docstrings. 
 
@@ -8,13 +10,13 @@ In the following lines, we add some brief information about each of the modules 
 The modules can be imported independently,
 
 ```python
-from masclet_framework import read_masclet
+from cosmoAMRframework import read_enzo
 ```
 
 or all at once,
 
 ```python
-import masclet_framework as masclet
+import cosmoAMRframework as CAF
 ```
 
 in which case the modules can be accessed by masclet.read_masclet, for instance.
@@ -23,10 +25,12 @@ Our recommendation is to clone this repository and move the folder masclet_frame
 
 ```python
 import sys
-sys.path.append('/path/to/the/folder/containing/masclet_framework')
+sys.path.append('/path/to/the/folder/containing/cosmoAMRframework')
 ```
 
 ## Modules description
+
+(Outdated, many modules missing)
 
 ### read_masclet
 Contains the necessary functions to read MASCLET output files (gas, dark matter and stars files), as well as some other utilities.
