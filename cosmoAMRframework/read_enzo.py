@@ -448,7 +448,8 @@ def reprocess_grid_hierarchy(hierarchy, Units, ghost_zones=3):
             pz = int((z1 - zlparent) / dzparent)
 
         # number of patches at each level
-        grids_data['npatch'][lev] += 1
+        if lev > 0: # at lev=0 we do not count it, consistency with MASCLET format
+            grids_data['npatch'][lev] += 1
 
         # ENZO's index of each grid; used for the dictionary of grids, which is indexed by the grid ID
         grids_data['patch_ID'][iglists] = ig
