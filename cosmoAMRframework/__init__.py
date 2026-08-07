@@ -31,3 +31,4 @@ import cosmoAMRframework.calcAMR
 import cosmoAMRframework.stars
 import cosmoAMRframework.dynstate
 import cosmoAMRframework.read_voids
+import cosmoAMRframework.read_enzo
