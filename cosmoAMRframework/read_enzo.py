@@ -560,7 +560,7 @@ def determine_relevant_grids(simupath, grids_data, region=None, up_to_level=None
     return do_read_grid
 
 def read_grid_quantity(simupath, quantity_name, grids_data, Units, region=None, up_to_level=None,
-                       verbose=True, units_operation=None):
+                       verbose=True, units_operation=None, override_default_unit_conversion=False):
 
 
     # Determine which grids are relevant for the specified region and max level
@@ -572,6 +572,12 @@ def read_grid_quantity(simupath, quantity_name, grids_data, Units, region=None, 
     cpu_tasks_needed = np.unique(grids_data['cpu'][do_read_grid])
     if verbose:
         print(f"Number of files to read: {len(cpu_tasks_needed)} (CPU tasks: {cpu_tasks_needed})")
+
+    if not override_default_unit_conversion:
+        if quantity_name in ['x-velocity', 'y-velocity', 'z-velocity']:
+            units_operation = transform_velocity_to_kms
+            if verbose:
+                print(f'Field is a velocity, so it will be transformed to km/s.')
 
     quantity_data = [0 for _ in range(grids_data['numpatches'])]
     for cpu in cpu_tasks_needed:
