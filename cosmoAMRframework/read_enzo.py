@@ -612,6 +612,10 @@ def read_particle_quantity(simupath, quantity_name, grids_data, Units, region=No
             units_operation = transform_mass_to_Msun
             if verbose:
                 print(f'Field is a particle mass, so it will be transformed to Msun.')
+        if quantity_name in ['particle_velocity_x', 'particle_velocity_y', 'particle_velocity_z']:
+            units_operation = transform_velocity_to_kms
+            if verbose:
+                print(f'Field is a particle velocity, so it will be transformed to km/s.')
 
     is_mass = quantity_name in ['particle_mass']
 
@@ -746,26 +750,39 @@ def print_available_grids(simupath, cpu_id=0, print_content=False):
 
 def transform_position_to_Mpc(positions, Units):
     """
-    Transforms particle positions from code units to physical Mpc units.
+    Transforms particle positions from code units to Mpc units.
 
     Args:
         positions (np.ndarray): Particle positions in code units.
         Units (EnzoUnits): The ENZO units as computed from the parameter file.
 
     Returns:
-        np.ndarray: Particle positions in physical Mpc units.
+        np.ndarray: Particle positions in Mpc units.
     """
     return positions * Units.ulength_Mpc
 
 def transform_mass_to_Msun(masses, Units):
     """
-    Transforms particle masses from code units to physical Msun units.
+    Transforms particle masses from code units to Msun units.
 
     Args:
         masses (np.ndarray): Particle masses in code units.
         Units (EnzoUnits): The ENZO units as computed from the parameter file.
 
     Returns:
-        np.ndarray: Particle masses in physical Msun units.
+        np.ndarray: Particle masses in Msun units.
     """
     return masses * Units.umass_Msun
+
+def transform_velocity_to_kms(velocities, Units):
+    """
+    Transforms particle velocities from code units to km/s units.
+
+    Args:
+        velocities (np.ndarray): Particle velocities in code units.
+        Units (EnzoUnits): The ENZO units as computed from the parameter file.
+
+    Returns:
+        np.ndarray: Particle velocities in km/s units.
+    """
+    return velocities * Units.uvel_kms
