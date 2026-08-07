@@ -13,6 +13,12 @@ Created by David Vallés
 """
 
 import re
+from cosmoAMRframework.cosmo_tools import background_density
+import numpy as np
+
+############################################
+# Block: read parameter files 
+############################################
 
 def parse_value(value):
     """
@@ -80,3 +86,106 @@ def read_simulation_data(simulation_file_path):
                 params[key] = parse_value(value)
 
     return params
+
+############################################
+# Block: units
+############################################
+
+class EnzoUnits:
+    """
+    Computes the ENZO code units from the simulation parameter file.
+    Initializes the units based on the cosmological parameters and box size provided in the 
+        parameter file.
+
+    It is initialized passing the dictionary returned by read_simulation_data() to the 
+        constructor.
+
+    Returns: the Units object.
+    """
+
+    # ---------- Physical constants ----------
+    MPC_TO_M = 3.085678e22
+    M_TO_MPC = 1.0 / MPC_TO_M
+
+    MPC_TO_CM = MPC_TO_M * 100.0
+    CM_TO_MPC = 1.0 / MPC_TO_CM
+
+    MSUN_TO_KG = 1.98848e30
+    KG_TO_MSUN = 1.0 / MSUN_TO_KG
+
+    MSUN_TO_G = MSUN_TO_KG * 1000.0
+    G_TO_MSUN = 1.0 / MSUN_TO_G
+
+    G_SI = 6.67430e-11
+    G_CGS = 6.67430e-8
+
+    YEAR_TO_S = 365.25 * 24 * 3600.
+
+
+    def __init__(self, params):
+
+        self.h = params["CosmologyHubbleConstantNow"]
+        self.omega_m = params["CosmologyOmegaMatterNow"]
+        self.omega_b = self.omega_m - params["CosmologyOmegaDarkMatterNow"]
+
+        self.zini = params["CosmologyInitialRedshift"]
+
+        self.nx = params["TopGridDimensions"][0]
+        self.box_size = params["CosmologyComovingBoxSize"] / self.h
+
+        self.fb = (self.omega_m - self.omega_b) / self.omega_m
+
+        self._compute_units()
+
+
+    def _compute_units(self):
+
+        # ---------- Mass ----------
+        mass_box = background_density(self.h, self.omega_m) * self.box_size**3
+        self.umass_Msun = mass_box / self.nx**3 # no h-1 factors here
+        # in Msun/h
+        self.umass_Msun_per_h = self.umass_Msun * self.h
+
+        self.umass_kg = self.umass_Msun * self.MSUN_TO_KG
+        self.umass_g = self.umass_Msun * self.MSUN_TO_G
+
+        # ---------- Length ----------
+        self.ulength_Mpc = self.box_size
+        # in Mpc/h
+        self.ulength_Mpc_per_h = self.ulength_Mpc * self.h
+
+        self.ulength_m = self.ulength_Mpc * self.MPC_TO_M
+        self.ulength_cm = self.ulength_Mpc * self.MPC_TO_CM
+
+        # ---------- Time ----------
+        rho0 = (
+            background_density(self.h, self.omega_m)
+            * self.MSUN_TO_KG
+            / self.MPC_TO_M**3
+        )
+
+        self.utime_s = 1.0 / np.sqrt(
+            4.0 * np.pi
+            * self.G_SI
+            * rho0
+            * (1.0 + self.zini) ** 3
+        )
+
+        self.utime_yr = self.utime_s / self.YEAR_TO_S
+
+        # ---------- Velocity ----------
+        length_phys_m = self.ulength_m / (1.0 + self.zini)
+
+        self.uvel_ms = length_phys_m / self.utime_s
+        self.uvel_kms = self.uvel_ms / 1000.0
+        self.uvel_cms = self.uvel_ms * 100.0
+
+
+    def __repr__(self):
+
+        return (
+            f"Mass unit     : {self.umass_Msun:.6e} Msun\n"
+            f"Length unit   : {self.ulength_Mpc:.6e} Mpc\n"
+            f"Velocity unit : {self.uvel_kms:.6e} km/s\n"
+            f"Time unit     : {self.utime_yr:.6e} yr"
+        )
