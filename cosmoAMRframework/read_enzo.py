@@ -135,7 +135,8 @@ class EnzoUnits:
         self.nx = params["TopGridDimensions"][0]
         self.box_size = params["CosmologyComovingBoxSize"] / self.h
 
-        self.fb = (self.omega_m - self.omega_b) / self.omega_m
+        self.fDM = (self.omega_m - self.omega_b) / self.omega_m
+        self.fb = 1 - self.fDM
 
         self._compute_units()
 
