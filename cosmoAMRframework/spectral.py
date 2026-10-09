@@ -29,7 +29,8 @@ def binned_mean_kernel(data, fx, fy, fz, fft_amplitudes, kbins, dx):
     #float to avoid integer overflow!!!!
     #nx*ny*nz might be > 2**31 e.g. for nx = 2048
     Ntot = float(data.size)
-    norm = float(data.shape[0]*dx)**3 / Ntot**2
+    #norm = float(data.shape[0]*dx)**3 / Ntot**2 # only for cubic grids!
+    norm = dx**3 / Ntot
 
     Pk = np.zeros(len(kbins)-1)
     counts = np.zeros(len(kbins)-1)
