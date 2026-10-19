@@ -578,6 +578,10 @@ def read_grid_quantity(simupath, quantity_name, grids_data, Units, region=None, 
             units_operation = transform_velocity_to_kms
             if verbose:
                 print(f'Field is a velocity, so it will be transformed to km/s.')
+        if quantity_name in ['TotalEnergy', 'GasEnergy']: # specific energies! 
+            units_operation = transform_specific_energy_to_km2s2
+            if verbose:
+                print(f'Field is a specific energy, so it will be transformed to km^2/s^2.')
 
     quantity_data = [0 for _ in range(grids_data['numpatches'])]
     for cpu in cpu_tasks_needed:
@@ -792,3 +796,17 @@ def transform_velocity_to_kms(velocities, Units):
         np.ndarray: Particle velocities in km/s units.
     """
     return velocities * Units.uvel_kms
+
+
+def transform_specific_energy_to_km2s2(specific_energies, Units):
+    """
+    Transforms specific energies from code units to km^2/s^2 units.
+
+    Args:
+        specific_energies (np.ndarray): Specific energies in code units.
+        Units (EnzoUnits): The ENZO units as computed from the parameter file.
+
+    Returns:
+        np.ndarray: Specific energies in km^2/s^2 units.
+    """
+    return specific_energies * Units.uvel_kms**2
