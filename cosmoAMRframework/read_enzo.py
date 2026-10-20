@@ -210,8 +210,12 @@ def read_hierarchy_file(hierarchy_file_path):
         dict: Dictionary indexed by Grid ID. Each entry is another dictionary containing all the 
             properties of that grid.
 
-    Caution! The dictionary will be indexed by the ENZO grid ID, which is generally one more than the 
-        grid index that we use in cosmoAMRframework (which is 0-indexed).
+    Caution! The dictionary will be indexed by the ENZO grid ID, which is NOT the grid index that we use 
+        in the cosmoAMRframework (0-index, with the full root grid as index 0).
+        
+    With parallel root grid IO, the root grid appears here as several level-0 grids (tiles).
+        reprocess_grid_hierarchy() also takes care of this, and will merge them and build the
+        correspondence between both numberings.    
     """
     if not hierarchy_file_path.endswith(".hierarchy"):
         hierarchy_file_path = hierarchy_file_path + '.hierarchy'
@@ -244,7 +248,108 @@ def read_hierarchy_file(hierarchy_file_path):
 
     return grids
 
-def reprocess_grid_hierarchy(hierarchy, Units, ghost_zones=3):
+
+def build_root_tile_map(grids, tile_ids, root_dims):
+    """ 
+    Describes how the root grid (level 0) is split among several ENZO grids ("tiles"), as it happens when 
+    the simulation is run with ParalllelRootGridIO = 1. Without parallel root grid IO there is just one tile
+    spanning the whole box, so the same machinery works for both cases.
+
+    Args:
+        grids (dict): The grid hierarchy as returned by read_hierarchy_file.
+        tile_ids (list): List of ENZO grid IDs that correspond to the root grid tiles.
+        root_dims (tuple or list): (Nx, Ny, Nz), number of cells in the full root grid.
+
+    Returns:
+        dict with:
+            - 'ntiles' (int): number of tiles.
+            - 'root_dims' (tuple): (Nx, Ny, Nz) of the full root grid.
+            - 'grid_ID' (array, ntiles): ENZO ID of each tile (i.e., the GridXXXXXXXX group in the hdf5 file).
+            - 'cpu' (array, ntiles): Task of each tile, i.e., the .cpuNNNN file where it is stored.
+            - 'numpart' (array, ntiles): number of particles in each tile
+            - 'i1', 'i2', 'j1', 'j2', 'k1', 'k2' (arrays, ntiles): tile number "it" covers the cells
+                [i1[it]:i2[it], j1[it]:j2[it], k1[it]:k2[it]] in the full root grid. (Python convention:
+                0-indexed, right end excluded; i, j, k along x, y, z, i.e. the ordering of the arrays we return after .T)
+            - 'edges_x', 'edges_y', 'edges_z' (arrays, ntiles): root grid cell indices where tile boundaries lie, in each
+                direction. They define a coarse 3d layout of blocks; with ENZO's decomposition of the root grid 
+                (Layout[0] x Layout[1] x Layout[2] tiles), each block is exactly one tile.
+            - 'tile_map' (3d int array, shape (len(edges_x)-1, len(edges_y)-1, len(edges_z)-1)): position (in the 
+                1d arrays above) of the tile that covers each block).
+            - 'grid_ID_map', 'cpu_map' (3d int arrays, same shape as tile_map): ENZO ID and CPU task of the tile covering each block.
+            - 'is_regular' (bool): True if each block is exactly one tile.
+    """
+
+    root_dims = tuple(int(n) for n in root_dims)
+    tile_ids = np.array(sorted(tile_ids), dtype=int)
+    ntiles = len(tile_ids)
+    if ntiles == 0:
+        raise ValueError("No level-0 grids found in the hierarchy!!!")
+
+    lo = np.zeros((ntiles, 3), dtype=int)
+    hi = np.zeros((ntiles, 3), dtype=int)
+    cpu = np.zeros(ntiles, dtype=int)
+    numpart = np.zeros(ntiles, dtype=int)
+    dims = np.array(root_dims, dtype=int)
+
+    for it, ig in enumerate(tile_ids):
+        grid = grids[int(ig)]
+        left = np.array(grid['GridLeftEdge'], dtype=float) * dims 
+        right = np.array(grid['GridRightEdge'], dtype=float) * dims
+        lo[it] = np.rint(left).astype(int)
+        hi[it] = np.rint(right).astype(int)
+        nreal = np.array(grid['GridEndIndex'], dtype=int) - np.array(grid['GridStartIndex'], dtype=int) + 1
+
+        if not (np.allclose(left, lo[it]) and np.allclose(right, hi[it])):
+            raise ValueError(f"Root grid tile (grid {ig}) has edges not aligned with the root grid cells: {left} - {right} vs {lo[it]} - {hi[it]}")
+
+        if not np.array_equal(hi[it] - lo[it], nreal):
+            raise ValueError(f"Root grid tile (grid {ig}) covers {hi[it] - lo[it]} cells according to its edges, ",
+                             f"but has {nreal} real cells. Check the hierarchy file.")
+
+        if (lo[it] < 0).any() or (hi[it] > dims).any():
+            raise ValueError(f"Root grid tile (grid {ig}) has edges outside the root grid: {lo[it]} - {hi[it]} vs {dims}")
+
+        cpu[it] = grid['Task']
+        numpart[it] = grid['NumberOfParticles']
+
+    # Coarse layout of blocks defined by all tile boundaries. Check that the tiles cover the box, without gaps or overlaps.
+    edges = [np.unique(np.concatenate((lo[:, i], hi[:, i]))) for i in range(3)]
+    for i in range(3):
+        if edges[i][0] != 0 or edges[i][-1] != dims[i]:
+            raise ValueError(f"Root grid tiles do not cover the full box in direction {i}: edges {edges[i]} vs dims {dims[i]}")
+
+    tile_map = np.full([len(e) - 1 for e in edges], -1, dtype=int)
+    for it in range(ntiles):
+        a = [np.searchsorted(edges[i], lo[it, i]) for i in range(3)]
+        b = [np.searchsorted(edges[i], hi[it, i]) for i in range(3)]
+        block = tile_map[a[0]:b[0], a[1]:b[1], a[2]:b[2]]
+        if (block>=0).any():
+            raise ValueError(f"Root grid tiles overlap in the block layout: tile {it} (grid {tile_ids[it]}) overlaps with another tile.")
+        tile_map[a[0]:b[0], a[1]:b[1], a[2]:b[2]] = it
+
+    if (tile_map < 0).any():
+        raise ValueError("Root grid tiles do not cover the full box in the block layout.")
+
+    root_tiles = {
+        'ntiles': ntiles,
+        'root_dims': root_dims,
+        'grid_ID': tile_ids,
+        'cpu': cpu,
+        'numpart': numpart,
+        'i1': lo[:, 0], 'i2': hi[:, 0],
+        'j1': lo[:, 1], 'j2': hi[:, 1],
+        'k1': lo[:, 2], 'k2': hi[:, 2],
+        'edges_x': edges[0], 'edges_y': edges[1], 'edges_z': edges[2],
+        'tile_map': tile_map,
+        'grid_ID_map': tile_ids[tile_map],
+        'cpu_map': cpu[tile_map],
+        'is_regular': tile_map.size == ntiles
+    }
+
+    return root_tiles
+
+
+def reprocess_grid_hierarchy(hierarchy, Units, ghost_zones=3, verbose=False):
     """ 
     Reprocesses the grid hierarchy and returns the relevant arrays for the simulation, so that these data can be interoperated by the
     cosmoAMRframework.
@@ -253,23 +358,45 @@ def reprocess_grid_hierarchy(hierarchy, Units, ghost_zones=3):
         hierarchy (dict): The grid hierarchy as returned by read_hierarchy_file.
         Units (EnzoUnits): The ENZO units as computed from the parameter file.
         ghost_zones (int): The number of ghost zones in the simulation (default is 3).
+        verbose (bool): If True, prints additional information during processing.
 
     Returns:
         - grids (dict): The reprocessed grid hierarchy with additional information.
+            Note: It is still index by ENZO ID (and parent/children/siblings/cousins refer to ENZO IDs).
+            Each grid gets an 'index' key with its cosmoAMRframework index (0 for all the root grid tiles), and the
+            root grid tiles also get a 'root_tile' key with their position in grids_data['root_tiles].
         - grids_data (dict): A dictionary containing arrays of grid properties for easier access and interoperability with the cosmoAMRframework.
 
-    Caution! All references to grids here will use the 0-indexed convention, which is different from the 
-        ENZO grid ID convention (which is 1-indexed, we call it patch_ID). 
+    Root grid: when ENZO splits the root grid among processors (ParallelRootGridIO), the level-0 grid appears in the
+        hierarchy as several grids ("tiles", ENZO IDs 1, ..., NP as ENZO writes them), each covering a part of the box 
+        and possibly stored in a different .cpuNNNN file. Here, all level-0 grids are detected and merged into a 
+        single root grid covering the whole box, which is always index 0 in grids_data. Nothing in grids_data refers 
+        to the individual tiles, except for grids_data['root_tiles'] (see build_root_tile_map), which describes how to 
+        reassemble the root grid, and is what read_grid_quantity and read_particle_quantity use for that. 
+        Without parallel root grid IO there is a single tile, and everything is as before.
+
+    Caution! All references to grids in grids_data use the cosmoAMRframework convention, which is different from the 
+        ENZO grid ID convention (1-indexed, we call it patch_ID): index 0 is the full root grid, and the rest of grids
+        are numbered 1, 2, ..., numpatches-1, following the order of their ENZO IDs. With a single root grid, 
+        index = patch_ID - 1 (as before); with the root grid in NP tiles (IDs 1, ..., NP), index = patch_ID - NP for 
+        the refined grids.
         
-        The returned grids_data will have all indices adjusted to be 0-indexed.
-        We also keep the patch_ID for redundancy.
+    The returned grids_data will have all indices adjusted to this convention.
+    We also keep the patch_ID for redundancy (-1 for the root grid if it is made of severa tiles, since then there is no 
+    single ENZO grid behind it).
     """
     # copy the dictionary ensuring that v is not a reference to the original dictionary
     grids = {k: v.copy() for k, v in hierarchy.items()}
+    ids = sorted(grids.keys())
 
-    # find out grid level, patchx,y,z (coordinates of the leftmost real parent cell),
-    # patchrx,ry,rz (real coordinates of the centre of that cell), and patchnx,ny,nz (number of real cells in each direction)
-    for ig in grids.keys():
+    # number of reall cells in each direction, and cell size (in box units) of each grid 
+    nreal = {}
+    cellsize = {}
+
+    #####################################################################
+    # 0th step: Find out grid level, and the root grid tiles (if any)
+    #####################################################################
+    for ig in ids:
         grid = grids[ig]
         
         # Check we specified the correct buffer
@@ -278,26 +405,58 @@ def reprocess_grid_hierarchy(hierarchy, Units, ghost_zones=3):
             print('Warning! The number of ghost zones in the hierarchy file is not equal to the one specified in the function call. Using the one from the hierarchy file.')
             ghost_zones = buf
 
-        xl, yl, zl = grid['GridLeftEdge']
-        xr, yr, zr = grid['GridRightEdge']
-        nx, ny, nz = np.array(grid['GridDimension'])-ghost_zones*2
-        if xr-xl == 1. and yr-yl == 1. and zr-zl == 1.:
-            grid['GridLevel'] = 0
-            dx = 1./nx
-            dy = 1./ny
-            dz = 1./nz
-            # dx, dy, dz are the base grid ones
-        else:
-            dxp = (xr-xl)/nx 
-            lev = np.log2(dx/dxp)
-            # raise an error if lev is not an integer
-            if not np.isclose(lev, int(lev)):
-                raise ValueError(f"Grid {ig} has a non-integer level: {lev}. Check the grid dimensions and edges.")
-            grid['GridLevel'] = int(lev)
+        nreal[ig] = np.array(grid['GridDimension'], dtype=int) - ghost_zones*2
+        cellsize[ig] = (np.array(grid['GridRightEdge'], dtype=float) - np.array(grid['GridLeftEdge'], dtype=float)) / nreal[ig]
+
+    # Root grid resolution. Without parallel-IO, we could just look for a grid spanning the whole box.
+    # With parallel root grid IO, the root grid is split in tiles, none of them spanning the whole box.
+    # However, we can detect them because they have the coarsest cells in the hierarchy.
+    Nx, Ny, Nz = [int(round(1./c)) for c in np.max([cellsize[ig] for ig in ids], axis=0)]
+    if Nx != Units.nx:
+        print(f'Warning! The root grid resolution inferred from the hierarchy ({Nx}) is different from TopGridDimensions ({Units.nx}).')
+    dx = 1. / Nx
+    dy = 1. / Ny
+    dz = 1. / Nz
+    # dx, dy, dz are the cell sizes of the base (root) grid in internal units 
+
+    # Now, we can find out grid levels 
+    for ig in ids:
+        levs = np.log2(np.array([dx, dy, dz]) / cellsize[ig])
+        lev = int(round(levs[0]))
+        if not np.allclose(levs, lev):
+            raise ValueError(f"Grid {ig} has non-uniform cell sizes, or non-integer level: ",
+                             f"{cellsize[ig]} vs root grid cell size {dx, dy, dz}. levs = {levs}")
+        grids[ig]['GridLevel'] = lev
+
+    # In the case of parallel root grid IO, we also need to find out which are the root grid tiles (all level-0 ones),
+    #  and assign them the right cosmoAMRframework indices (0 for all of them), and the rest of grids will be indexed from 1 to numpatches-1, 
+    #  following the order of their ENZO IDs.
+    tile_ids = [ig for ig in ids if grids[ig]['GridLevel'] == 0]
+    ##refined_ids = [ig for ig in ids if grids[ig]['GridLevel'] > 0] # No!! because we expect them to be sorted by level! (masclet_framework inheritance...)
+    refined_ids = sorted([ig for ig in ids if grids[ig]['GridLevel'] > 0], key=lambda ig: (grids[ig]['GridLevel'], ig)) # sort by level, then by ENZO ID
+
+    # from ENZO ID to cosmoAMRframework index
+    id2index = {ig: 0 for ig in tile_ids}
+    id2index.update({ig: i+1 for i, ig in enumerate(refined_ids)})
+    for ig in ids:
+        grids[ig]['index'] = id2index[ig]
+
+    root_tiles = build_root_tile_map(grids, tile_ids, (Nx, Ny, Nz))
+    for it, ig in enumerate(tile_ids):
+        grids[int(ig)]['root_tile'] = it
+
+    if verbose and root_tiles['ntiles'] > 1:
+        layout = 'x'.join(str(n) for n in root_tiles['tile_map'].shape)
+        print(f"Root grid ({Nx}x{Ny}x{Nz}) is split into {root_tiles['ntiles']} tiles, with layout ({layout}"
+              f"{'' if root_tiles['is_regular'] else ', irregular'}), stored in "
+              f"{len(np.unique(root_tiles['cpu']))} files. They will be merged into a single root grid (index 0).")
+
 
     # do another pass and correct the hierarchy file for the wrongly placed pointers! 
+    #####################################################################
     # 1st remove all pointers from grids
-    for ig in grids.keys():
+    #####################################################################
+    for ig in ids:
         delete_list = []
         for k, v in grids[ig].items():
             if k.startswith('Pointer: Grid['):
@@ -305,10 +464,12 @@ def reprocess_grid_hierarchy(hierarchy, Units, ghost_zones=3):
         for k in delete_list:
             del grids[ig][k]
 
+    #####################################################################
     # 2nd add the pointers to the correct grids
+    #####################################################################
     p_NextGridThisLevel = {}
     p_NextGridNextLevel = {}
-    for ig in grids.keys():
+    for ig in ids:
         for k, v in hierarchy[ig].items(): # the original, unmodified one! 
             if k.startswith('Pointer: Grid['):
                 # extract the number with a regex 
@@ -322,8 +483,13 @@ def reprocess_grid_hierarchy(hierarchy, Units, ghost_zones=3):
                 elif 'NextGridNextLevel' in k:
                     p_NextGridNextLevel[pointer_grid_id] = v
 
-    # 3rd identify parent grids, sibling grids, child grids,
-    for ig in grids.keys():
+    #####################################################################
+    # 3rd identify parent grids, sibling grids, child grids.
+    # Note: this is still in terms of ENZO IDs, as ENZO writes them (that is to say,
+    # level 1 grids have the different root tiles as their parents).
+    # The tiles will be merged later on, when building the grids_data.
+    #####################################################################
+    for ig in ids:
         children = []
         igchild = p_NextGridNextLevel[ig]
 
@@ -338,24 +504,24 @@ def reprocess_grid_hierarchy(hierarchy, Units, ghost_zones=3):
 
         grids[ig]['children'] = children
 
-    for ig in grids.keys():
+    for ig in ids:
+        grids[ig]['siblings'] = [] # root grid (tiles) have no siblings 
+    for ig in ids:
         children = grids[ig]['children']
-        if len(children) > 0:
-            for child in children:
-                if 'siblings' not in grids[child]:
-                    grids[child]['siblings'] = []
-                grids[child]['siblings'].extend([c for c in children if c != child])
-    grids[1]['siblings'] = [] # root grid has no siblings
-    
-    # 4th identify cousin grids; i.e. cells that, being at the same level, but regardless of their parentage, overlap in space.
+        for child in children:
+            grids[child]['siblings'] = [c for c in children if c != child]
+
+    #####################################################################
+    # 4th identify cousin grids; i.e. cells that, being at the same level, but regardless of their parent, overlap in space.
     #  in principle, in ENZO, this should not be happening as grids at the same level don't overlap (in the active zone)
-    for ig in grids.keys():
+    #####################################################################
+    for ig in ids:
         grids[ig]['cousins'] = []
 
-    maxlev = max([grids[ig]['GridLevel'] for ig in grids.keys()])
+    maxlev = max([grids[ig]['GridLevel'] for ig in ids])
     for l in range(1, maxlev + 1):
         #print(f"Finding cousins at level {l}...")
-        grids_at_level = [ig for ig in grids.keys() if grids[ig]['GridLevel'] == l]
+        grids_at_level = [ig for ig in ids if grids[ig]['GridLevel'] == l]
         for ig1 in grids_at_level:
             for ig2 in grids_at_level:
                 if ig1 >= ig2:
@@ -375,16 +541,15 @@ def reprocess_grid_hierarchy(hierarchy, Units, ghost_zones=3):
                     grids[ig1]['cousins'].append(ig2)
                     grids[ig2]['cousins'].append(ig1)
 
-    if sum([len(grids[ig]['cousins']) for ig in grids.keys()]) > 0:
+    if sum([len(grids[ig]['cousins']) for ig in ids]) > 0:
         print('\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
         print("Warning: there are overlapping grids at the same level (cousings). Is this expected?")
         print('\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
 
     grids_data = {} # this is our main new output here
 
-    maxlev = max([grids[ig]['GridLevel'] for ig in grids.keys()])
     grids_data['nlev'] = maxlev
-    numpatches = len(grids)
+    numpatches = 1 + len(refined_ids)
     grids_data['numpatches'] = numpatches
 
     grids_data['npatch'] = np.zeros(maxlev+1, dtype=int)
@@ -406,8 +571,33 @@ def reprocess_grid_hierarchy(hierarchy, Units, ghost_zones=3):
     grids_data['cpu'] = np.zeros(numpatches, dtype=int)
     grids_data['numpart'] = np.zeros(numpatches, dtype=int)
 
-    for ig in grids.keys():
-        iglists = ig - 1
+    ntiles = root_tiles['ntiles']
+
+    # Enzo ID: if the root grid is made of several tiles, there is no single one (see grids_data['root_tiles'] for the list)
+    grids_data['patch_ID'][0] = root_tiles['grid_ID'][0] if ntiles == 1 else -1
+
+    # patchx, patchy, patchz = 0 for the root grid; patchrx, patchry, patchrz is the centre of the leftmost parent cell... 
+    grids_data['patchrx'][0] = dx 
+    grids_data['patchry'][0] = dy
+    grids_data['patchrz'][0] = dz
+
+    grids_data['patchnx'][0] = Nx
+    grids_data['patchny'][0] = Ny
+    grids_data['patchnz'][0] = Nz
+
+    grids_data['pare'][0] = -1 # root grid has no parent 
+    # children of the root grid: those of all the tiles 
+    grids_data['children'][0] = sorted([id2index[c] for ig in tile_ids for c in grids[ig]['children']])
+    grids_data['cousins'][0] = [] # root grid has no cousins
+    grids_data['levels'][0] = 0
+
+    # if it is made of several tiles, they can be in different files (see grids_data['root_tiles'])
+    grids_data['cpu'][0] = root_tiles['cpu'][0] if ntiles == 1 else -1 
+    grids_data['numpart'][0] = root_tiles['numpart'].sum()
+
+    # Now, the rest of the grids
+    for ig in refined_ids:
+        iglists = id2index[ig]
 
         grid = grids[ig]
         lev = int(grid['GridLevel'])
@@ -416,49 +606,45 @@ def reprocess_grid_hierarchy(hierarchy, Units, ghost_zones=3):
         dyp = dy / 2**lev
         dzp = dz / 2**lev
 
-        nx = grid['GridDimension'][0] - ghost_zones*2
-        ny = grid['GridDimension'][1] - ghost_zones*2
-        nz = grid['GridDimension'][2] - ghost_zones*2
+        nx, ny, nz = nreal[ig]
 
         xl, yl, zl = grid['GridLeftEdge']
         xr, yr, zr = grid['GridRightEdge']
 
-        assert xl + nx*dxp == xr, f"Grid {ig} has inconsistent dimensions in x: {xl} + {nx}*{dxp} != {xr}"
-        assert yl + ny*dyp == yr, f"Grid {ig} has inconsistent dimensions in y: {yl} + {ny}*{dyp} != {yr}"
-        assert zl + nz*dzp == zr, f"Grid {ig} has inconsistent dimensions in z: {zl} + {nz}*{dzp} != {zr}"
+        assert np.isclose(xl+nx*dxp, xr), f"Grid {ig} has inconsistent dimensions in x: {xl} + {nx}*{dxp} != {xr}"
+        assert np.isclose(yl+ny*dyp, yr), f"Grid {ig} has inconsistent dimensions in y: {yl} + {ny}*{dyp} != {yr}"
+        assert np.isclose(zl+nz*dzp, zr), f"Grid {ig} has inconsistent dimensions in z: {zl} + {nz}*{dzp} != {zr}"
 
-        if lev == 0:
-            px = 0
-            py = 0
-            pz = 0 
-            parent = 0
+        # coordinates of the leftmost cell centre (not the left edge of the grid, but the centre of the first cell)
+        x1 = xl + 0.5*dxp
+        y1 = yl + 0.5*dyp
+        z1 = zl + 0.5*dzp
+
+        parent = grid['parent'] # ENZO ID
+        if grids[parent]['GridLevel'] == 0:
+            # the parent is one of the root grid tiles: positions must refer to the reconstructed root grid,
+            #  which starts at the left edge of the box (and not to the tile)
+            xlparent, ylparent, zlparent = 0., 0., 0.
         else:
-            # coordinates of the leftmost cell centre (not the left edge of the grid, but the centre of the first cell)
-            x1 = xl + 0.5*dxp
-            y1 = yl + 0.5*dyp
-            z1 = zl + 0.5*dzp
-
-            parent = grid['parent']
             xlparent, ylparent, zlparent = grids[parent]['GridLeftEdge']
-            dxparent = dx / 2**(lev-1)
-            dyparent = dy / 2**(lev-1)
-            dzparent = dz / 2**(lev-1)
-            # already in python format (0 is the first cell)
-            px = int((x1 - xlparent) / dxparent)
-            py = int((y1 - ylparent) / dyparent)
-            pz = int((z1 - zlparent) / dzparent)
+        dxparent = dx / 2**(lev-1)
+        dyparent = dy / 2**(lev-1)
+        dzparent = dz / 2**(lev-1)
+        # already in python format (0 is the first cell)
+        px = int((x1 - xlparent) / dxparent)
+        py = int((y1 - ylparent) / dyparent)
+        pz = int((z1 - zlparent) / dzparent)
 
         # number of patches at each level
-        if lev > 0: # at lev=0 we do not count it, consistency with MASCLET format
-            grids_data['npatch'][lev] += 1
+        grids_data['npatch'][lev] += 1
 
         # ENZO's index of each grid; used for the dictionary of grids, which is indexed by the grid ID
         grids_data['patch_ID'][iglists] = ig
 
         # Coordinate of the leftmost parent cell in its patch
-        grids_data['patchx'][iglists] = px # To Do!
-        grids_data['patchy'][iglists] = py # To Do!
-        grids_data['patchz'][iglists] = pz # To Do!
+        grids_data['patchx'][iglists] = px 
+        grids_data['patchy'][iglists] = py
+        grids_data['patchz'][iglists] = pz 
 
         # cell center of the leftmost *parent* cell; this is for compatibility with all the cosmoAMRframework codes, whice
         #  was initially developed for MASCLET
@@ -471,13 +657,13 @@ def reprocess_grid_hierarchy(hierarchy, Units, ghost_zones=3):
         grids_data['patchny'][iglists] = ny
         grids_data['patchnz'][iglists] = nz
 
-        # parent grid index; -1 if no parent
-        grids_data['pare'][iglists] = parent-1 # here it always refers to the index in the list, not to the ID
+        # parent grid index; (0 for all level-1 grids, regardless of the tile they were in)
+        grids_data['pare'][iglists] = id2index[parent] # here it always refers to the index in the list, not to the ID
 
         # also do sibling, child lists, and cousing lists
-        grids_data['siblings'][iglists] = [s-1 for s in grid['siblings']] # here it always refers to the index in the list, not to the ID
-        grids_data['children'][iglists] = [c-1 for c in grid['children']] # here it always refers to the index in the list, not to the ID
-        grids_data['cousins'][iglists] = [c-1 for c in grid['cousins']] # here it always refers to the index in the list, not to the ID
+        #grids_data['siblings'][iglists] = [id2index[s] for s in grid['siblings']] # here it always refers to the index in the list, not to the ID
+        grids_data['children'][iglists] = [id2index[c] for c in grid['children']] # here it always refers to the index in the list, not to the ID
+        grids_data['cousins'][iglists] = [id2index[c] for c in grid['cousins']] # here it always refers to the index in the list, not to the ID
 
         # level
         grids_data['levels'][iglists] = lev
@@ -487,6 +673,14 @@ def reprocess_grid_hierarchy(hierarchy, Units, ghost_zones=3):
 
         # number of particles 
         grids_data['numpart'][iglists] = grid['NumberOfParticles']
+
+    # Sibling lists, in terms of the new indices. Since all root tiles are merged into grid 0, all level-1 grids
+    #  are siblings of each other (as with a single root grid); even if their ENZO parents were different tiles.
+    grids_data['siblings'][0] = []
+    for ip in range(numpatches):
+        children = grids_data['children'][ip]
+        for i, child in enumerate(children):
+            grids_data['siblings'][child] = children[:i] + children[i+1:]
         
     # To real coordinates 
     grids_data['patchrx'] *= Units.ulength_Mpc
@@ -509,6 +703,9 @@ def reprocess_grid_hierarchy(hierarchy, Units, ghost_zones=3):
     grids_data['Ny'] = grids_data['patchny'][0]
     grids_data['Nz'] = grids_data['patchnz'][0]
     grids_data['MaxLevel'] = grids_data['levels'].max()
+
+    # Information for reassembling the root grid from the ENZO tiles it is split into (if any)
+    grids_data['root_tiles'] = root_tiles
 
     return grids, grids_data
 
@@ -559,17 +756,77 @@ def determine_relevant_grids(simupath, grids_data, region=None, up_to_level=None
 
     return do_read_grid
 
+def _cpu_files_needed(grids_data, do_read_grid):
+    """ 
+    Returns the indices of the refined grids (index > 0) to be read, whether the root grid has to be read, 
+    and the CPU tasks (files)  that need to be opened for all that. The root grid (index 0) may be spread 
+    over several files (see grids_data['root_tiles']).
+    """
+    read_root = bool(do_read_grid[0])
+    refined_to_read = np.where(do_read_grid)[0]
+    refined_to_read = refined_to_read[refined_to_read != 0]  # exclude the root grid (index 0)
+
+    cpus_root = grids_data['root_tiles']['cpu'] if read_root else np.array([], dtype=int)
+    cpu_tasks_needed = np.unique(np.concatenate([grids_data['cpu'][refined_to_read], cpus_root]).astype(int))
+
+    return refined_to_read, read_root, cpu_tasks_needed
+
+
+def _place_root_tile(dset, root_tiles, it, root_zyx):
+    """ 
+    Reads root grid tile number "it" (position in grids_data['root_tiles']) from its hdf5 dataset,
+    directly into its place in root_zyx: the full root grid array, in the (z, y, x) order in which ENZO 
+    seems to store the data. This avoids intermediate copies, which can be a lot for big root grids.
+    """
+    i1, i2 = root_tiles['i1'][it], root_tiles['i2'][it]
+    j1, j2 = root_tiles['j1'][it], root_tiles['j2'][it]
+    k1, k2 = root_tiles['k1'][it], root_tiles['k2'][it]
+
+    if dset.shape != (k2-k1, j2-j1, i2-i1):
+        raise ValueError(f"Root grid tile {root_tiles['grid_ID'][it]} has shape {dset.shape} in the file"
+                         f", but expected {(k2-k1, j2-j1, i2-i1)} based on its edges (hierarchy file).")
+
+    dset.read_direct(root_zyx, dest_sel=np.s_[k1:k2, j1:j2, i1:i2])  # read directly into the right place in root_zyx
+
+
 def read_grid_quantity(simupath, quantity_name, grids_data, Units, region=None, up_to_level=None,
                        verbose=True, units_operation=None, override_default_unit_conversion=False):
+    """ 
+    Reads a grid (baryon) field.
+
+    Args:
+        simupath (str): Path to the simulation files (without the .cpuNNNN extension).
+        quantity_name (str): Name of the field to read (as stored in the HDF5 files).
+        grids_data (dict): The reprocessed grid hierarchy as returned by reprocess_grid_hierarchy.
+        Units (EnzoUnits): The ENZO units as computed from the parameter file.
+        region (tuple): Optional. Specifies a region to read. Can be:
+            - None: read all grids.
+            - ('sphere', cx, cy, cz, R): read grids that intersect a sphere of radius R centered at (cx, cy, cz).
+            - ('box', x1, x2, y1, y2, z1, z2): read grids that intersect a box defined by the corners (x1, y1, z1) and (x2, y2, z2).
+            - ('box_cw', xc, yc, zc, width): read grids that intersect a cube of side "width" centered at (xc, yc, zc).
+        up_to_level (int): Optional. If specified, only read grids up to this refinement level (inclusive).
+        verbose (bool): If True, prints additional information during reading.
+        units_operation (callable): Optional. A function to apply to the data for unit conversion. If None, no conversion is applied.
+        override_default_unit_conversion (bool): If True, overrides the default unit conversion for specific fields (e.g., velocity, specific energy).
+    
+    Returns:
+        - quantity_data (list): one array per grid (cosmoAMRframework indexing), 0 for the grids not read.
+            quantity_data[0] is always the full root grid, with shape (Nx, Ny, Nz), reassembled from all the level-0 
+            tiles (if any, i.e., if ParallelRootGridIO was activated) according to grids_data['root_tiles'].
+        - do_read_grid (np.ndarray): Boolean array indicating which grids were read (True) and which were not (False).
+    """
 
 
     # Determine which grids are relevant for the specified region and max level
     do_read_grid = determine_relevant_grids(simupath, grids_data, region=region, up_to_level=up_to_level)
+    root_tiles = grids_data['root_tiles']
     if verbose:
         print(f"Reading {quantity_name} from {np.sum(do_read_grid)} grids out of {grids_data['numpatches']} total grids.")
+        if do_read_grid[0] and root_tiles['ntiles'] > 1:
+            print(f"   The root grid is split into {root_tiles['ntiles']} tiles, which will be reassembled into a single array.")
 
     # Find which CPU tasks are needed for the grids to be read
-    cpu_tasks_needed = np.unique(grids_data['cpu'][do_read_grid])
+    refined_to_read, read_root, cpu_tasks_needed = _cpu_files_needed(grids_data, do_read_grid)
     if verbose:
         print(f"Number of files to read: {len(cpu_tasks_needed)} (CPU tasks: {cpu_tasks_needed})")
 
@@ -584,17 +841,31 @@ def read_grid_quantity(simupath, quantity_name, grids_data, Units, region=None, 
                 print(f'Field is a specific energy, so it will be transformed to km^2/s^2.')
 
     quantity_data = [0 for _ in range(grids_data['numpatches'])]
+    root_zyx = None
+    ntiles_read = 0
     for cpu in cpu_tasks_needed:
-        grids_on_cpu = np.where((grids_data['cpu'] == cpu) & do_read_grid)[0]
-        #if verbose:
-        #    print(f"Reading CPU task {cpu} with {len(grids_on_cpu)} grids...")
-        #    print(f"   Grids on CPU {cpu}: {grids_on_cpu}")
         with h5.File(f"{simupath}.cpu{cpu:04d}", 'r') as f:
-            for ig in grids_on_cpu:
+            # First, root grid tiles within this file 
+            if read_root:
+                for it in np.where(root_tiles['cpu'] == cpu)[0]:
+                    dset = f[f"Grid{root_tiles['grid_ID'][it]:08d}"][quantity_name]
+                    if root_zyx is None:
+                        root_zyx = np.empty((grids_data['Nz'], grids_data['Ny'], grids_data['Nx']), dtype=dset.dtype)
+                    _place_root_tile(dset, root_tiles, it, root_zyx)
+                    ntiles_read += 1 
+
+            # Then, the rest of grids in this file. 
+            for ig in refined_to_read[grids_data['cpu'][refined_to_read] == cpu]:
                 grid_id = grids_data['patch_ID'][ig]
                 quantity_data[ig] = np.array(f[f'Grid{grid_id:08d}'][quantity_name]).T
                 if units_operation is not None:
                     quantity_data[ig] = units_operation(quantity_data[ig], Units)
+
+    if read_root: # missing a final transposition + unit convrsion 
+        assert ntiles_read == root_tiles['ntiles'], f"Not all root grid tiles were read: {ntiles_read} out of {root_tiles['ntiles']}" 
+        quantity_data[0] = root_zyx.T # (x, y, z) order 
+        if units_operation is not None:
+            quantity_data[0] = units_operation(quantity_data[0], Units)
 
     return quantity_data, do_read_grid
 
@@ -604,12 +875,13 @@ def read_particle_quantity(simupath, quantity_name, grids_data, Units, region=No
 
     # Determine which grids are relevant for the specified region and max level
     do_read_grid = determine_relevant_grids(simupath, grids_data, region=region)
+    root_tiles = grids_data['root_tiles']
     if verbose:
         print(f"Reading {quantity_name} from the particles in {np.sum(do_read_grid)} grids out of {grids_data['numpatches']} total grids.")
         print(f"Total number of particles in the selected grids: {np.sum(grids_data['numpart'][do_read_grid])}")
 
-        # Find which CPU tasks are needed for the grids to be read
-    cpu_tasks_needed = np.unique(grids_data['cpu'][do_read_grid])
+    # Find which CPU tasks are needed for the grids to be read (the root grid particles can be in several of them)
+    refined_to_read, read_root, cpu_tasks_needed = _cpu_files_needed(grids_data, do_read_grid)
     if verbose:
         print(f"Number of files to read: {len(cpu_tasks_needed)} (CPU tasks: {cpu_tasks_needed})")
   
@@ -629,26 +901,29 @@ def read_particle_quantity(simupath, quantity_name, grids_data, Units, region=No
 
     is_mass = quantity_name in ['particle_mass']
 
+    def read_particles_of_grid(f, grid_id, level):
+        particle_quantity = np.array(f[f'Grid{grid_id:08d}'][quantity_name])
+        if is_mass:
+            particle_quantity /= 8**level  # Adjust mass for refinement level
+        if units_operation is not None:
+            particle_quantity = units_operation(particle_quantity, Units)
+        return particle_quantity
+
     particle_data = [] 
     for cpu in cpu_tasks_needed:
         with h5.File(f"{simupath}.cpu{cpu:04d}", 'r') as f:
-            grids_on_cpu = np.where((grids_data['cpu'] == cpu) & do_read_grid)[0]
-            #if verbose:
-            #    print(f"Reading CPU task {cpu} with {len(grids_on_cpu)} grids...")
-            #    print(f"   Grids on CPU {cpu}: {grids_on_cpu}")
-            for ig in grids_on_cpu:
-                if grids_data['numpart'][ig] == 0:
-                    continue  # Skip grids with no particles
-                grid_id = grids_data['patch_ID'][ig]
-                #print(ig, f[f'Grid{grid_id:08d}'].keys())
-                particle_quantity = np.array(f[f'Grid{grid_id:08d}'][quantity_name])
+            # particle of the root grid tiles stored in this file 
+            if read_root:
+                for it in np.where(root_tiles['cpu'] == cpu)[0]:
+                    if root_tiles['numpart'][it] == 0: # skip it, no particles 
+                        continue 
+                    particle_data.append(read_particles_of_grid(f, root_tiles['grid_ID'][it], 0))
 
-                if is_mass:
-                    particle_quantity /= 8**grids_data['levels'][ig]  # Adjust mass for refinement level
-                
-                if units_operation is not None:
-                    particle_quantity = units_operation(particle_quantity, Units)
-                particle_data.append(particle_quantity)
+            # particles of the rest of grids (refinements)
+            for ig in refined_to_read[grids_data['cpu'][refined_to_read] == cpu]:
+                if grids_data['numpart'][ig] == 0: # skip it, no particles
+                    continue 
+                particle_data.append(read_particles_of_grid(f, grids_data['patch_ID'][ig], grids_data['levels'][ig]))
 
     particle_data = np.concatenate(particle_data)  # Combine all particle data into a single array 
 
